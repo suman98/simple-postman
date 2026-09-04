@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
+use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
 class RequestRunController extends Controller
 {
@@ -102,8 +103,10 @@ class RequestRunController extends Controller
 
         return response()->json([
             'status' => $response->status(),
+            'reason' => SymfonyResponse::$statusTexts[$response->status()] ?? '',
             'ok' => $response->successful(),
             'duration_ms' => $durationMs,
+            'size_bytes' => strlen($rawBody),
             'headers' => $response->headers(),
             'body' => $jsonBody,
             'raw_body' => $rawBody,

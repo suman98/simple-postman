@@ -1,18 +1,18 @@
 @extends('layouts.app')
 
-@section('title', 'New Endpoint')
+@section('title', 'New endpoint')
 
 @section('content')
-    <h1 class="text-xl font-semibold mb-1">New Endpoint</h1>
-    <p class="text-sm text-slate-500 mb-4">In {{ $project->name }}</p>
+    <a href="{{ route('projects.show', $project) }}" class="text-sm text-text-muted hover:text-text">&larr; {{ $project->name }}</a>
+    <h1 class="mt-3 mb-4 text-lg font-semibold">New endpoint</h1>
 
-    <form method="POST" action="{{ route('projects.endpoints.store', $project) }}" class="bg-white rounded-lg shadow p-4 max-w-3xl space-y-4">
+    <form method="POST" action="{{ route('projects.endpoints.store', $project) }}" class="panel space-y-5 p-4">
         @csrf
         @include('endpoints.partials.form')
 
-        <div class="flex gap-2">
-            <button class="bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium">Create Endpoint</button>
-            <a href="{{ route('projects.show', $project) }}" class="px-4 py-2 rounded text-sm text-slate-600 hover:bg-slate-100">Cancel</a>
+        <div class="flex flex-wrap items-center gap-2 border-t border-border pt-4">
+            <button class="btn btn-primary">Save endpoint</button>
+            <a href="{{ route('projects.show', $project) }}" class="btn btn-secondary">Cancel</a>
         </div>
     </form>
 @endsection

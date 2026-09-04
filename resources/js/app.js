@@ -28,14 +28,97 @@ function createJsonEditor(container, initialDoc, onChange) {
                 if (update.docChanged) onChange(update.state.doc.toString());
             }),
             EditorView.theme({
-                '&': { fontSize: '13px', height: '260px' },
-                '.cm-scroller': { overflow: 'auto', fontFamily: 'ui-monospace, monospace' },
+                '&': { fontSize: '13px', height: '260px', backgroundColor: 'var(--color-field)', lineHeight: '1.6' },
+                '.cm-content': { color: 'var(--color-ink)', caretColor: 'var(--color-ink)' },
+                '.cm-scroller': { overflow: 'auto', fontFamily: 'var(--font-mono)' },
+                // Mobile Chrome boosts text in the wide content block but not in
+                // the narrow gutter, which walks the line numbers out of step.
+                '&, .cm-content, .cm-gutters, .cm-gutterElement': {
+                    '-webkit-text-size-adjust': '100%',
+                    'text-size-adjust': '100%',
+                },
             }),
         ],
         parent: container,
     });
 
+    keepMeasured(view);
+
     return view;
+}
+
+/**
+ * CodeMirror caches a measured height per line. Mounting one inside a panel
+ * that is still hidden bakes in metrics from the fallback font, and a later
+ * requestMeasure() won't invalidate that cache — the gutter then runs out of
+ * step with wrapped content. So every editor here is mounted on first reveal,
+ * and this only guards against the web font landing a moment afterwards.
+ */
+function keepMeasured(view) {
+    if (document.fonts?.ready) {
+        document.fonts.ready.then(() => view.requestMeasure());
+    }
+}
+
+/**
+ * Mounts an editor only once its container is really laid out AND the mono face
+ * has loaded. CodeMirror writes an inline height onto every gutter element from
+ * whatever it measured at construction, and a later requestMeasure() will not
+ * revisit it — so measuring against a zero-width box or fallback font metrics
+ * leaves the line numbers permanently out of step with the code beside them.
+ */
+function mountWhenReady(getEl, factory) {
+    const layoutReady = (attemptsLeft = 30) => {
+        const el = getEl();
+        if (el && el.offsetWidth > 0) {
+            factory(el);
+            return;
+        }
+        if (attemptsLeft <= 0) return;
+        requestAnimationFrame(() => layoutReady(attemptsLeft - 1));
+    };
+
+    if (document.fonts?.ready) {
+        document.fonts.ready.then(() => layoutReady());
+    } else {
+        layoutReady();
+    }
+}
+
+/**
+ * True when the gutter's row height matches the content's. CodeMirror bakes an
+ * inline height per gutter row at construction; if it measured mid-paint those
+ * heights are wrong for good, and the line numbers slide away from their lines.
+ */
+function gutterMatchesContent(container) {
+    const gutterRow = container?.querySelector('.cm-lineNumbers .cm-gutterElement:nth-child(2)');
+    const contentRow = container?.querySelector('.cm-content .cm-line');
+    if (!gutterRow || !contentRow) return true;
+
+    const drift = Math.abs(
+        gutterRow.getBoundingClientRect().height - contentRow.getBoundingClientRect().height
+    );
+    return drift <= 1;
+}
+
+/**
+ * Builds an editor into `container` and, on the next frame, checks that its
+ * gutter actually lines up. If it doesn't, it rebuilds once against the now
+ * settled layout. `onView` receives whichever view is current.
+ */
+function mountVerified(container, factory, onView, attemptsLeft = 6) {
+    onView(factory());
+
+    if (attemptsLeft <= 0) return;
+
+    // One frame is not always enough: the panel is still being revealed in the
+    // same paint, so layout can move under the first measurement. Re-check, and
+    // rebuild against the settled layout if the gutter came out wrong.
+    setTimeout(() => {
+        if (gutterMatchesContent(container)) return;
+        onView(null, { disposing: true });
+        mountVerified(container, factory, onView, attemptsLeft - 1);
+    }, 80);
 }
 
 function setEditorContent(view, text) {
@@ -61,7 +144,7 @@ function formatJsonEditor(view, currentText) {
  * back, rather than recreated, so scroll position resets cleanly.
  */
 function createJsonViewer(container, initialDoc) {
-    return new EditorView({
+    const view = new EditorView({
         doc: initialDoc || '',
         extensions: [
             lineNumbers(),
@@ -70,15 +153,29 @@ function createJsonViewer(container, initialDoc) {
             EditorState.readOnly.of(true),
             EditorView.editable.of(false),
             EditorView.theme({
-                '&': { fontSize: '12px', height: '380px', backgroundColor: '#ffffff' },
-                '.cm-content': { color: '#0f172a', caretColor: 'transparent' },
-                '.cm-scroller': { overflow: 'auto', fontFamily: 'ui-monospace, monospace' },
-                '.cm-gutters': { backgroundColor: '#f8fafc', color: '#94a3b8', border: 'none' },
+                // line-height lives on the root, not .cm-content: CodeMirror's
+                // height measurement runs outside the content node and would
+                // otherwise size the gutter off the default leading.
+                '&': { fontSize: '12.5px', height: '420px', backgroundColor: 'var(--color-field)', lineHeight: '1.6' },
+                '.cm-content': { color: 'var(--color-ink)', caretColor: 'transparent' },
+                '.cm-scroller': { overflow: 'auto', fontFamily: 'var(--font-mono)' },
+                // Mobile Chrome boosts text in the wide content block but not in
+                // the narrow gutter, which walks the line numbers out of step.
+                '&, .cm-content, .cm-gutters, .cm-gutterElement': {
+                    '-webkit-text-size-adjust': '100%',
+                    'text-size-adjust': '100%',
+                },
                 '.cm-activeLineGutter, .cm-activeLine': { backgroundColor: 'transparent' },
             }),
+            // Deliberately unwrapped: one source line is one numbered row, so the
+            // gutter can never drift from the content. Long values scroll sideways.
         ],
         parent: container,
     });
+
+    keepMeasured(view);
+
+    return view;
 }
 
 async function copyToClipboard(text) {
@@ -117,6 +214,7 @@ async function copyToClipboard(text) {
 Alpine.data('endpointForm', (config) => ({
     bodyType: config.bodyType || 'json',
     body: config.body || '',
+    method: config.method || 'GET',
     activeTab: 'params',
     paramRows: config.params && config.params.length ? config.params : [{ key: '', value: '' }],
     headerRows: config.headers && config.headers.length ? config.headers : [{ key: '', value: '' }],
@@ -124,9 +222,14 @@ Alpine.data('endpointForm', (config) => ({
     jsonEditorView: null,
     jsonFormatError: null,
 
-    init() {
-        this.jsonEditorView = createJsonEditor(this.$refs.jsonEditor, this.body, (value) => {
-            this.body = value;
+    /** Mounted the first time the Body tab is actually shown. */
+    mountJsonEditor() {
+        if (this.jsonEditorView) return;
+        mountWhenReady(() => this.$refs.jsonEditor, (el) => {
+            if (this.jsonEditorView) return;
+            this.jsonEditorView = createJsonEditor(el, this.body, (value) => {
+                this.body = value;
+            });
         });
     },
 
@@ -142,7 +245,7 @@ Alpine.data('endpointForm', (config) => ({
 
     showBodyTab() {
         this.activeTab = 'body';
-        this.$nextTick(() => this.jsonEditorView?.requestMeasure());
+        this.$nextTick(() => this.mountJsonEditor());
     },
 
     addParam() {
@@ -160,8 +263,12 @@ Alpine.data('endpointForm', (config) => ({
         if (this.headerRows.length === 0) this.addHeader();
     },
 
+    get methodClass() {
+        return 'method-' + this.method.toLowerCase();
+    },
+
     get paramsLabel() {
-        return this.bodyType === 'form' ? 'Form Data' : 'Query / Params';
+        return this.bodyType === 'form' ? 'Form data' : 'Params';
     },
 }));
 
@@ -186,14 +293,89 @@ Alpine.data('requestRunner', (config) => ({
     jsonEditorView: null,
     jsonFormatError: null,
     responseEditorView: null,
+    responseTab: 'body',
     copied: false,
 
     init() {
         if (this.persist) this.restore();
-        this.jsonEditorView = createJsonEditor(this.$refs.jsonEditor, this.body, (value) => {
-            this.body = value;
+
+        // Open on whichever tab actually carries something, so a filed
+        // endpoint shows its payload instead of an empty params table.
+        if (this.bodyType === 'json' && this.body.trim() !== '') {
+            this.showBodyTab();
+        }
+    },
+
+    /** Mounted the first time the Body tab is actually shown. */
+    mountJsonEditor() {
+        if (this.jsonEditorView) return;
+        mountWhenReady(() => this.$refs.jsonEditor, (el) => {
+            if (this.jsonEditorView) return;
+            this.jsonEditorView = createJsonEditor(el, this.body, (value) => {
+                this.body = value;
+            });
         });
-        this.responseEditorView = createJsonViewer(this.$refs.responseEditor, '');
+    },
+
+    get methodClass() {
+        return 'method-' + this.method.toLowerCase();
+    },
+
+    get statusClass() {
+        const status = this.response?.status ?? 0;
+        if (status >= 200 && status < 300) return 'status-2xx';
+        if (status >= 300 && status < 400) return 'status-3xx';
+        return 'status-4xx';
+    },
+
+    get prettySize() {
+        const bytes = this.response?.size_bytes ?? 0;
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    },
+
+    /** Laravel hands back each response header value as an array. */
+    get responseHeaderRows() {
+        const headers = this.response?.headers ?? {};
+        return Object.entries(headers).map(([key, value]) => ({
+            key,
+            value: Array.isArray(value) ? value.join(', ') : String(value),
+        }));
+    },
+
+    showResponseBody() {
+        this.responseTab = 'body';
+        this.$nextTick(() => this.renderResponseBody());
+    },
+
+    /**
+     * Builds the response viewer into whichever container is currently mounted.
+     * The response block is re-created on every send, so the view is rebuilt
+     * rather than refilled — which also guarantees CodeMirror measures its line
+     * heights against the layout that is really on screen.
+     */
+    renderResponseBody() {
+        if (!this.response?.raw_body) return;
+        const body = this.prettyBody;
+
+        this.responseEditorView?.destroy();
+        this.responseEditorView = null;
+
+        mountWhenReady(() => this.$refs.responseEditor, (container) => {
+            mountVerified(
+                container,
+                () => createJsonViewer(container, body),
+                (view, { disposing } = {}) => {
+                    if (disposing) {
+                        this.responseEditorView?.destroy();
+                        this.responseEditorView = null;
+                        return;
+                    }
+                    this.responseEditorView = view;
+                }
+            );
+        });
     },
 
     formatJson() {
@@ -208,7 +390,7 @@ Alpine.data('requestRunner', (config) => ({
 
     showBodyTab() {
         this.activeTab = 'body';
-        this.$nextTick(() => this.jsonEditorView?.requestMeasure());
+        this.$nextTick(() => this.mountJsonEditor());
     },
 
     restore() {
@@ -297,7 +479,24 @@ Alpine.data('requestRunner', (config) => ({
     response: null,
 
     get paramsLabel() {
-        return this.bodyType === 'form' ? 'Form Data' : 'Query / Params';
+        return this.bodyType === 'form' ? 'Form data' : 'Params';
+    },
+
+    /** GET/DELETE send params on the query string; the rest send a body. */
+    get paramsHint() {
+        const asQuery = this.method === 'GET' || this.method === 'DELETE';
+        if (asQuery) return 'Sent as query string parameters.';
+        return this.bodyType === 'form'
+            ? 'Sent as form-encoded fields in the request body.'
+            : 'Sent as query string parameters. Use the Body tab for the JSON payload.';
+    },
+
+    get filledParamCount() {
+        return this.paramRows.filter((row) => row.key).length;
+    },
+
+    get filledHeaderCount() {
+        return this.headerRows.filter((row) => row.key).length;
     },
 
     async send() {
@@ -336,10 +535,8 @@ Alpine.data('requestRunner', (config) => ({
                 this.error = data.error;
             } else {
                 this.response = data;
-                this.$nextTick(() => {
-                    setEditorContent(this.responseEditorView, this.prettyBody);
-                    this.responseEditorView?.requestMeasure();
-                });
+                this.responseTab = 'body';
+                this.$nextTick(() => this.renderResponseBody());
             }
         } catch (e) {
             this.error = e.message || 'Request failed.';

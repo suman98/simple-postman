@@ -1,6 +1,7 @@
 @php
     $endpoint ??= null;
     $formConfig = [
+        'method' => old('method', $endpoint->method ?? 'GET'),
         'bodyType' => old('body_type', $endpoint->body_type ?? 'json'),
         'body' => old('body', $endpoint->body ?? ''),
         'params' => old('params', collect($endpoint->params ?? [])->map(fn ($v, $k) => ['key' => $k, 'value' => $v])->values()->toArray()),
@@ -9,81 +10,92 @@
 @endphp
 
 <div>
-    <label class="block text-sm font-medium mb-1">Name</label>
-    <input type="text" name="name" value="{{ old('name', $endpoint->name ?? '') }}"
-           class="w-full border rounded px-3 py-2 text-sm" required autofocus>
+    <label for="endpoint-name" class="field-label">Name</label>
+    <input id="endpoint-name" type="text" name="name" value="{{ old('name', $endpoint->name ?? '') }}"
+           class="field @error('name') border-danger @enderror" placeholder="Create user" required autofocus
+           @error('name') aria-invalid="true" aria-describedby="endpoint-name-error" @enderror>
     @error('name')
-        <p class="text-red-600 text-sm mt-1">{{ $message }}</p>
+        <p id="endpoint-name-error" class="mt-1.5 text-sm text-danger">{{ $message }}</p>
     @enderror
 </div>
 
-<div x-data="endpointForm({{ Illuminate\Support\Js::from($formConfig) }})">
-    <div class="flex gap-2 mb-4">
-        <select name="method" class="border rounded px-2 py-2 text-sm font-mono bg-white">
-            @foreach (['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as $m)
-                <option value="{{ $m }}" @selected(old('method', $endpoint->method ?? 'GET') === $m)>{{ $m }}</option>
-            @endforeach
-        </select>
-        <input type="text" name="url" value="{{ old('url', $endpoint->url ?? '') }}"
-               placeholder="https://api.example.com/resource"
-               class="flex-1 border rounded px-3 py-2 text-sm font-mono" required>
+<div x-data="endpointForm({{ Illuminate\Support\Js::from($formConfig) }})" class="space-y-4">
+    <div>
+        <span class="field-label">Request</span>
+        <div class="flex flex-col gap-2 sm:flex-row">
+            <select name="method" x-model="method" class="method-select shrink-0" :class="methodClass" aria-label="HTTP method">
+                @foreach (['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as $m)
+                    <option value="{{ $m }}">{{ $m }}</option>
+                @endforeach
+            </select>
+
+            <input type="url" name="url" value="{{ old('url', $endpoint->url ?? '') }}"
+                   placeholder="https://api.example.com/users" spellcheck="false" required
+                   class="field field-mono min-w-0 flex-1 @error('url') border-danger @enderror"
+                   aria-label="Request URL"
+                   @error('url') aria-invalid="true" aria-describedby="endpoint-url-error" @enderror>
+        </div>
+        @error('url')
+            <p id="endpoint-url-error" class="mt-1.5 text-sm text-danger">{{ $message }}</p>
+        @enderror
     </div>
-    @error('url')
-        <p class="text-red-600 text-sm -mt-3 mb-3">{{ $message }}</p>
-    @enderror
 
-    <div class="border rounded-lg">
-        <div class="px-4 pt-3 flex items-center gap-4 text-sm border-b">
-            <button type="button" @click="activeTab = 'params'"
-                    :class="activeTab === 'params' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500'"
-                    class="pb-2 border-b-2" x-text="paramsLabel"></button>
-            <button type="button" @click="showBodyTab()" x-show="bodyType === 'json'"
-                    :class="activeTab === 'body' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500'"
-                    class="pb-2 border-b-2">Body</button>
-            <button type="button" @click="activeTab = 'headers'"
-                    :class="activeTab === 'headers' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500'"
-                    class="pb-2 border-b-2">Headers</button>
+    <div class="overflow-hidden rounded border border-border">
+        <div class="flex flex-wrap items-center gap-x-5 border-b border-border bg-sunken px-3">
+            <button type="button" @click="activeTab = 'params'" class="tab" :class="activeTab === 'params' && 'tab-active'" x-text="paramsLabel"></button>
+            <button type="button" @click="showBodyTab()" x-show="bodyType === 'json'" class="tab" :class="activeTab === 'body' && 'tab-active'">Body</button>
+            <button type="button" @click="activeTab = 'headers'" class="tab" :class="activeTab === 'headers' && 'tab-active'">Headers</button>
 
-            <label class="ml-auto pb-2 flex items-center gap-2 text-slate-500">
-                <span>Body type</span>
-                <select name="body_type" x-model="bodyType" class="border rounded px-2 py-1 bg-white">
+            <label class="ml-auto flex shrink-0 items-center gap-2 py-1.5">
+                <span class="whitespace-nowrap text-xs text-text-muted">Body type</span>
+                <select name="body_type" x-model="bodyType" class="field w-auto px-2 py-1 text-xs" aria-label="Body type">
                     <option value="json">JSON</option>
-                    <option value="form">Form Data</option>
+                    <option value="form">Form data</option>
                 </select>
             </label>
         </div>
 
-        <div class="p-4">
+        <div class="p-3">
             <div x-show="activeTab === 'params'">
+                <div class="mb-1.5 grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_28px] gap-x-2">
+                    <span class="text-xs text-text-muted">Key</span>
+                    <span class="text-xs text-text-muted">Value</span>
+                </div>
                 <template x-for="(row, index) in paramRows" :key="index">
-                    <div class="flex gap-2 mb-2">
-                        <input type="text" :name="`params[${index}][key]`" x-model="row.key" placeholder="key" class="flex-1 border rounded px-2 py-1 text-sm font-mono">
-                        <input type="text" :name="`params[${index}][value]`" x-model="row.value" placeholder="value" class="flex-1 border rounded px-2 py-1 text-sm font-mono">
-                        <button type="button" @click="removeParam(index)" class="text-slate-400 hover:text-red-600 px-2">&times;</button>
+                    <div class="mb-1.5 grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_28px] items-center gap-x-2">
+                        <input type="text" :name="`params[${index}][key]`" x-model="row.key" placeholder="key" class="field field-mono" spellcheck="false">
+                        <input type="text" :name="`params[${index}][value]`" x-model="row.value" placeholder="value" class="field field-mono" spellcheck="false">
+                        <button type="button" @click="removeParam(index)" class="text-text-faint hover:text-danger"
+                                :aria-label="`Remove ${row.key || 'empty'} parameter`">&times;</button>
                     </div>
                 </template>
-                <button type="button" @click="addParam" class="text-sm text-blue-600 hover:underline">+ Add row</button>
+                <button type="button" @click="addParam" class="btn btn-link mt-1">+ Add row</button>
             </div>
 
             <div x-show="activeTab === 'body'" x-cloak>
-                <div class="flex items-center justify-between mb-2">
-                    <span class="text-xs text-slate-400">Raw JSON body</span>
-                    <button type="button" @click="formatJson" class="text-sm text-blue-600 hover:underline">Format</button>
+                <div class="mb-2 flex items-center justify-between">
+                    <span class="text-xs text-text-muted">JSON request body</span>
+                    <button type="button" @click="formatJson" class="btn btn-secondary btn-sm">Format</button>
                 </div>
-                <div x-ref="jsonEditor" class="border rounded overflow-hidden"></div>
-                <p class="text-red-600 text-sm mt-1" x-show="jsonFormatError" x-text="jsonFormatError" x-cloak></p>
-                <textarea name="body" x-model="body" class="hidden" aria-hidden="true"></textarea>
+                <div x-ref="jsonEditor" class="overflow-hidden rounded border border-border"></div>
+                <p class="mt-2 text-xs text-danger" x-show="jsonFormatError" x-text="jsonFormatError" x-cloak></p>
+                <textarea name="body" x-model="body" class="hidden" aria-hidden="true" tabindex="-1"></textarea>
             </div>
 
             <div x-show="activeTab === 'headers'" x-cloak>
+                <div class="mb-1.5 grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_28px] gap-x-2">
+                    <span class="text-xs text-text-muted">Key</span>
+                    <span class="text-xs text-text-muted">Value</span>
+                </div>
                 <template x-for="(row, index) in headerRows" :key="index">
-                    <div class="flex gap-2 mb-2">
-                        <input type="text" :name="`headers[${index}][key]`" x-model="row.key" placeholder="Header-Name" class="flex-1 border rounded px-2 py-1 text-sm font-mono">
-                        <input type="text" :name="`headers[${index}][value]`" x-model="row.value" placeholder="value" class="flex-1 border rounded px-2 py-1 text-sm font-mono">
-                        <button type="button" @click="removeHeader(index)" class="text-slate-400 hover:text-red-600 px-2">&times;</button>
+                    <div class="mb-1.5 grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_28px] items-center gap-x-2">
+                        <input type="text" :name="`headers[${index}][key]`" x-model="row.key" placeholder="Content-Type" class="field field-mono" spellcheck="false">
+                        <input type="text" :name="`headers[${index}][value]`" x-model="row.value" placeholder="application/json" class="field field-mono" spellcheck="false">
+                        <button type="button" @click="removeHeader(index)" class="text-text-faint hover:text-danger"
+                                :aria-label="`Remove ${row.key || 'empty'} header`">&times;</button>
                     </div>
                 </template>
-                <button type="button" @click="addHeader" class="text-sm text-blue-600 hover:underline">+ Add row</button>
+                <button type="button" @click="addHeader" class="btn btn-link mt-1">+ Add row</button>
             </div>
         </div>
     </div>

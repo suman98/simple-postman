@@ -3,30 +3,40 @@
 @section('title', 'Projects')
 
 @section('content')
-    <div class="flex items-center justify-between mb-4">
-        <h1 class="text-xl font-semibold">Projects</h1>
-        <a href="{{ route('projects.create') }}" class="bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium">
-            New Project
-        </a>
+    <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+            <h1 class="text-lg font-semibold">Projects</h1>
+            <p class="mt-1 text-sm text-text-muted">Saved endpoints, grouped by project.</p>
+        </div>
+        <a href="{{ route('projects.create') }}" class="btn btn-primary">New project</a>
     </div>
 
     @if ($projects->isEmpty())
-        <div class="bg-white rounded-lg shadow p-8 text-center text-slate-500">
-            No projects yet. Create one to start grouping endpoints.
+        <div class="panel px-6 py-14 text-center">
+            <p class="text-sm font-medium">No projects yet</p>
+            <p class="mx-auto mt-1.5 max-w-[46ch] text-sm text-text-muted">
+                A project keeps a set of endpoints so you can re-run them without retyping the URL.
+            </p>
+            <a href="{{ route('projects.create') }}" class="btn btn-secondary mt-5">New project</a>
         </div>
     @else
-        <div class="bg-white rounded-lg shadow divide-y">
+        <ul class="panel divide-y divide-border">
             @foreach ($projects as $project)
-                <a href="{{ route('projects.show', $project) }}" class="flex items-center justify-between px-4 py-3 hover:bg-slate-50">
-                    <div>
-                        <div class="font-medium">{{ $project->name }}</div>
-                        @if ($project->description)
-                            <div class="text-sm text-slate-500">{{ $project->description }}</div>
-                        @endif
-                    </div>
-                    <span class="text-sm text-slate-400">{{ $project->endpoints_count }} endpoint{{ $project->endpoints_count === 1 ? '' : 's' }}</span>
-                </a>
+                <li>
+                    <a href="{{ route('projects.show', $project) }}"
+                       class="flex items-center justify-between gap-4 px-4 py-3 hover:bg-canvas">
+                        <span class="min-w-0">
+                            <span class="block text-sm font-medium">{{ $project->name }}</span>
+                            @if ($project->description)
+                                <span class="mt-0.5 block truncate text-sm text-text-muted">{{ $project->description }}</span>
+                            @endif
+                        </span>
+                        <span class="shrink-0 text-xs text-text-muted">
+                            {{ $project->endpoints_count }} {{ Str::plural('endpoint', $project->endpoints_count) }}
+                        </span>
+                    </a>
+                </li>
             @endforeach
-        </div>
+        </ul>
     @endif
 @endsection

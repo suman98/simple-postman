@@ -1,18 +1,19 @@
 @extends('layouts.app')
 
-@section('title', 'Edit Project')
+@section('title', 'Edit ' . $project->name)
 
 @section('content')
-    <h1 class="text-xl font-semibold mb-4">Edit Project</h1>
+    <a href="{{ route('projects.show', $project) }}" class="text-sm text-text-muted hover:text-text">&larr; {{ $project->name }}</a>
+    <h1 class="mt-3 mb-4 text-lg font-semibold">Edit project</h1>
 
-    <form method="POST" action="{{ route('projects.update', $project) }}" class="bg-white rounded-lg shadow p-4 max-w-lg space-y-4">
+    <form method="POST" action="{{ route('projects.update', $project) }}" class="panel max-w-2xl space-y-5 p-4">
         @csrf
         @method('PUT')
         @include('projects.partials.form')
 
-        <div class="flex gap-2">
-            <button class="bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium">Save Changes</button>
-            <a href="{{ route('projects.show', $project) }}" class="px-4 py-2 rounded text-sm text-slate-600 hover:bg-slate-100">Cancel</a>
+        <div class="flex flex-wrap items-center gap-2 border-t border-border pt-4">
+            <button class="btn btn-primary">Save changes</button>
+            <a href="{{ route('projects.show', $project) }}" class="btn btn-secondary">Cancel</a>
         </div>
     </form>
 @endsection
