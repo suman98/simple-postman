@@ -215,12 +215,30 @@ Alpine.data('endpointForm', (config) => ({
     bodyType: config.bodyType || 'json',
     body: config.body || '',
     method: config.method || 'GET',
-    activeTab: 'params',
+    activeTab: (config.method || 'GET') === 'GET' ? 'params' : 'body',
     paramRows: config.params && config.params.length ? config.params : [{ key: '', value: '' }],
+    formRows: config.formRows && config.formRows.length ? config.formRows : [{ key: '', value: '' }],
     headerRows: config.headers && config.headers.length ? config.headers : [{ key: '', value: '' }],
 
     jsonEditorView: null,
     jsonFormatError: null,
+    payloadCopied: false,
+
+    init() {
+        this.$watch('method', () => this.syncActiveTab());
+        if (this.activeTab === 'body' && this.bodyType === 'json') {
+            this.$nextTick(() => this.mountJsonEditor());
+        }
+    },
+
+    get isGet() {
+        return this.method === 'GET';
+    },
+
+    syncActiveTab() {
+        if (this.isGet && this.activeTab === 'body') this.activeTab = 'params';
+        if (!this.isGet && this.activeTab === 'params') this.showBodyTab();
+    },
 
     /** Mounted the first time the Body tab is actually shown. */
     mountJsonEditor() {
@@ -245,7 +263,27 @@ Alpine.data('endpointForm', (config) => ({
 
     showBodyTab() {
         this.activeTab = 'body';
-        this.$nextTick(() => this.mountJsonEditor());
+        if (this.bodyType === 'json') this.$nextTick(() => this.mountJsonEditor());
+    },
+
+    get payloadText() {
+        if (this.bodyType === 'form') {
+            return this.formRows
+                .filter((row) => row.key)
+                .map((row) => `${encodeURIComponent(row.key)}=${encodeURIComponent(row.value)}`)
+                .join('&');
+        }
+        return this.body;
+    },
+
+    async copyPayload() {
+        const ok = await copyToClipboard(this.payloadText || '');
+        if (ok) {
+            this.payloadCopied = true;
+            setTimeout(() => {
+                this.payloadCopied = false;
+            }, 1500);
+        }
     },
 
     addParam() {
@@ -254,6 +292,13 @@ Alpine.data('endpointForm', (config) => ({
     removeParam(index) {
         this.paramRows.splice(index, 1);
         if (this.paramRows.length === 0) this.addParam();
+    },
+    addFormRow() {
+        this.formRows.push({ key: '', value: '' });
+    },
+    removeFormRow(index) {
+        this.formRows.splice(index, 1);
+        if (this.formRows.length === 0) this.addFormRow();
     },
     addHeader() {
         this.headerRows.push({ key: '', value: '' });
@@ -265,10 +310,6 @@ Alpine.data('endpointForm', (config) => ({
 
     get methodClass() {
         return 'method-' + this.method.toLowerCase();
-    },
-
-    get paramsLabel() {
-        return this.bodyType === 'form' ? 'Form data' : 'Params';
     },
 }));
 
@@ -284,8 +325,9 @@ Alpine.data('requestRunner', (config) => ({
     bodyType: config.bodyType || 'json',
     body: config.body || '',
     paramRows: config.params && config.params.length ? config.params : [{ key: '', value: '' }],
+    formRows: config.formRows && config.formRows.length ? config.formRows : [{ key: '', value: '' }],
     headerRows: config.headers && config.headers.length ? config.headers : [{ key: '', value: '' }],
-    activeTab: 'params',
+    activeTab: (config.method || 'GET') === 'GET' ? 'params' : 'body',
 
     persist: !!config.persist,
     storageKey: config.storageKey || 'apiBench:lastRequest',
@@ -295,15 +337,26 @@ Alpine.data('requestRunner', (config) => ({
     responseEditorView: null,
     responseTab: 'body',
     copied: false,
+    payloadCopied: false,
 
     init() {
         if (this.persist) this.restore();
+        this.$watch('method', () => this.syncActiveTab());
 
         // Open on whichever tab actually carries something, so a filed
         // endpoint shows its payload instead of an empty params table.
-        if (this.bodyType === 'json' && this.body.trim() !== '') {
+        if (this.activeTab === 'body' && this.bodyType === 'json') {
             this.showBodyTab();
         }
+    },
+
+    get isGet() {
+        return this.method === 'GET';
+    },
+
+    syncActiveTab() {
+        if (this.isGet && this.activeTab === 'body') this.activeTab = 'params';
+        if (!this.isGet && this.activeTab === 'params') this.showBodyTab();
     },
 
     /** Mounted the first time the Body tab is actually shown. */
@@ -390,7 +443,27 @@ Alpine.data('requestRunner', (config) => ({
 
     showBodyTab() {
         this.activeTab = 'body';
-        this.$nextTick(() => this.mountJsonEditor());
+        if (this.bodyType === 'json') this.$nextTick(() => this.mountJsonEditor());
+    },
+
+    get payloadText() {
+        if (this.bodyType === 'form') {
+            return this.formRows
+                .filter((row) => row.key)
+                .map((row) => `${encodeURIComponent(row.key)}=${encodeURIComponent(row.value)}`)
+                .join('&');
+        }
+        return this.body;
+    },
+
+    async copyPayload() {
+        const ok = await copyToClipboard(this.payloadText || '');
+        if (ok) {
+            this.payloadCopied = true;
+            setTimeout(() => {
+                this.payloadCopied = false;
+            }, 1500);
+        }
     },
 
     restore() {
@@ -408,7 +481,9 @@ Alpine.data('requestRunner', (config) => ({
         this.bodyType = saved.bodyType ?? this.bodyType;
         this.body = saved.body ?? this.body;
         if (saved.paramRows?.length) this.paramRows = saved.paramRows;
+        if (saved.formRows?.length) this.formRows = saved.formRows;
         if (saved.headerRows?.length) this.headerRows = saved.headerRows;
+        this.activeTab = this.isGet ? 'params' : 'body';
     },
 
     persistState() {
@@ -420,6 +495,7 @@ Alpine.data('requestRunner', (config) => ({
                 bodyType: this.bodyType,
                 body: this.body,
                 paramRows: this.paramRows,
+                formRows: this.formRows,
                 headerRows: this.headerRows,
             }));
         } catch (e) {
@@ -433,7 +509,9 @@ Alpine.data('requestRunner', (config) => ({
         this.bodyType = 'json';
         this.body = '';
         this.paramRows = [{ key: '', value: '' }];
+        this.formRows = [{ key: '', value: '' }];
         this.headerRows = [{ key: '', value: '' }];
+        this.activeTab = 'params';
         this.response = null;
         this.error = null;
         this.jsonFormatError = null;
@@ -455,6 +533,7 @@ Alpine.data('requestRunner', (config) => ({
     clearPayload() {
         this.body = '';
         this.paramRows = [{ key: '', value: '' }];
+        this.formRows = [{ key: '', value: '' }];
         this.jsonFormatError = null;
         setEditorContent(this.jsonEditorView, '');
     },
@@ -465,6 +544,13 @@ Alpine.data('requestRunner', (config) => ({
     removeParam(index) {
         this.paramRows.splice(index, 1);
         if (this.paramRows.length === 0) this.addParam();
+    },
+    addFormRow() {
+        this.formRows.push({ key: '', value: '' });
+    },
+    removeFormRow(index) {
+        this.formRows.splice(index, 1);
+        if (this.formRows.length === 0) this.addFormRow();
     },
     addHeader() {
         this.headerRows.push({ key: '', value: '' });
@@ -477,19 +563,6 @@ Alpine.data('requestRunner', (config) => ({
     loading: false,
     error: null,
     response: null,
-
-    get paramsLabel() {
-        return this.bodyType === 'form' ? 'Form data' : 'Params';
-    },
-
-    /** GET/DELETE send params on the query string; the rest send a body. */
-    get paramsHint() {
-        const asQuery = this.method === 'GET' || this.method === 'DELETE';
-        if (asQuery) return 'Sent as query string parameters.';
-        return this.bodyType === 'form'
-            ? 'Sent as form-encoded fields in the request body.'
-            : 'Sent as query string parameters. Use the Body tab for the JSON payload.';
-    },
 
     get filledParamCount() {
         return this.paramRows.filter((row) => row.key).length;
@@ -506,7 +579,8 @@ Alpine.data('requestRunner', (config) => ({
         this.persistState();
 
         const params = {};
-        for (const row of this.paramRows) {
+        const rows = this.isGet ? this.paramRows : this.formRows;
+        for (const row of rows) {
             if (row.key) params[row.key] = row.value;
         }
         const headers = this.headerRows.filter((row) => row.key);

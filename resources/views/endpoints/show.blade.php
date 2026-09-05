@@ -28,12 +28,17 @@
         Changes here only affect this run. Use Edit to update the saved endpoint.
     </p>
 
+    @php
+        $endpointRows = collect($endpoint->params ?? [])->map(fn ($v, $k) => ['key' => $k, 'value' => $v])->values()->toArray();
+    @endphp
+
     @include('partials.request-runner', ['runner' => [
         'method' => $endpoint->method,
         'url' => $endpoint->url,
         'bodyType' => $endpoint->body_type,
         'body' => $endpoint->body,
-        'params' => collect($endpoint->params ?? [])->map(fn ($v, $k) => ['key' => $k, 'value' => $v])->values()->toArray(),
+        'params' => $endpoint->method === 'GET' ? $endpointRows : [],
+        'formRows' => $endpoint->method !== 'GET' ? $endpointRows : [],
         'headers' => $endpoint->headers ?? [],
         'persist' => false,
     ]])

@@ -1,10 +1,13 @@
 @php
     $endpoint ??= null;
+    $storedMethod = old('method', $endpoint->method ?? 'GET');
+    $storedRows = collect($endpoint->params ?? [])->map(fn ($v, $k) => ['key' => $k, 'value' => $v])->values()->toArray();
     $formConfig = [
-        'method' => old('method', $endpoint->method ?? 'GET'),
+        'method' => $storedMethod,
         'bodyType' => old('body_type', $endpoint->body_type ?? 'json'),
         'body' => old('body', $endpoint->body ?? ''),
-        'params' => old('params', collect($endpoint->params ?? [])->map(fn ($v, $k) => ['key' => $k, 'value' => $v])->values()->toArray()),
+        'params' => old('params', $storedMethod === 'GET' ? $storedRows : []),
+        'formRows' => old('params', $storedMethod !== 'GET' ? $storedRows : []),
         'headers' => old('headers', $endpoint->headers ?? []),
     ];
 @endphp
@@ -42,11 +45,11 @@
 
     <div class="overflow-hidden rounded border border-border">
         <div class="flex flex-wrap items-center gap-x-5 border-b border-border bg-sunken px-3">
-            <button type="button" @click="activeTab = 'params'" class="tab" :class="activeTab === 'params' && 'tab-active'" x-text="paramsLabel"></button>
-            <button type="button" @click="showBodyTab()" x-show="bodyType === 'json'" class="tab" :class="activeTab === 'body' && 'tab-active'">Body</button>
+            <button type="button" x-show="isGet" @click="activeTab = 'params'" class="tab" :class="activeTab === 'params' && 'tab-active'">Params</button>
+            <button type="button" x-show="!isGet" @click="showBodyTab()" class="tab" :class="activeTab === 'body' && 'tab-active'">Body</button>
             <button type="button" @click="activeTab = 'headers'" class="tab" :class="activeTab === 'headers' && 'tab-active'">Headers</button>
 
-            <label class="ml-auto flex shrink-0 items-center gap-2 py-1.5">
+            <label class="ml-auto flex shrink-0 items-center gap-2 py-1.5" x-show="!isGet">
                 <span class="whitespace-nowrap text-xs text-text-muted">Body type</span>
                 <select name="body_type" x-model="bodyType" class="field w-auto px-2 py-1 text-xs" aria-label="Body type">
                     <option value="json">JSON</option>
@@ -56,7 +59,7 @@
         </div>
 
         <div class="p-3">
-            <div x-show="activeTab === 'params'">
+            <div x-show="activeTab === 'params' && isGet">
                 <div class="mb-1.5 grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_28px] gap-x-2">
                     <span class="text-xs text-text-muted">Key</span>
                     <span class="text-xs text-text-muted">Value</span>
@@ -72,14 +75,48 @@
                 <button type="button" @click="addParam" class="btn btn-link mt-1">+ Add row</button>
             </div>
 
-            <div x-show="activeTab === 'body'" x-cloak>
-                <div class="mb-2 flex items-center justify-between">
-                    <span class="text-xs text-text-muted">JSON request body</span>
-                    <button type="button" @click="formatJson" class="btn btn-secondary btn-sm">Format</button>
-                </div>
-                <div x-ref="jsonEditor" class="overflow-hidden rounded border border-border"></div>
-                <p class="mt-2 text-xs text-danger" x-show="jsonFormatError" x-text="jsonFormatError" x-cloak></p>
-                <textarea name="body" x-model="body" class="hidden" aria-hidden="true" tabindex="-1"></textarea>
+            <div x-show="activeTab === 'body' && !isGet" x-cloak>
+                <template x-if="bodyType === 'json'">
+                    <div>
+                        <div class="mb-2 flex items-center justify-between">
+                            <span class="text-xs text-text-muted">JSON request body</span>
+                            <div class="flex items-center gap-2">
+                                <button type="button" @click="copyPayload" class="btn btn-secondary btn-sm">
+                                    <span x-show="!payloadCopied">Copy</span>
+                                    <span x-show="payloadCopied" x-cloak class="text-success">Copied</span>
+                                </button>
+                                <button type="button" @click="formatJson" class="btn btn-secondary btn-sm">Format</button>
+                            </div>
+                        </div>
+                        <div x-ref="jsonEditor" class="overflow-hidden rounded border border-border"></div>
+                        <p class="mt-2 text-xs text-danger" x-show="jsonFormatError" x-text="jsonFormatError" x-cloak></p>
+                        <textarea name="body" x-model="body" class="hidden" aria-hidden="true" tabindex="-1"></textarea>
+                    </div>
+                </template>
+
+                <template x-if="bodyType === 'form'">
+                    <div>
+                        <div class="mb-1.5 flex items-center justify-between">
+                            <div class="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-x-2">
+                                <span class="text-xs text-text-muted">Key</span>
+                                <span class="text-xs text-text-muted">Value</span>
+                            </div>
+                            <button type="button" @click="copyPayload" class="btn btn-secondary btn-sm">
+                                <span x-show="!payloadCopied">Copy</span>
+                                <span x-show="payloadCopied" x-cloak class="text-success">Copied</span>
+                            </button>
+                        </div>
+                        <template x-for="(row, index) in formRows" :key="index">
+                            <div class="mb-1.5 grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_28px] items-center gap-x-2">
+                                <input type="text" :name="`params[${index}][key]`" x-model="row.key" placeholder="key" class="field field-mono" spellcheck="false">
+                                <input type="text" :name="`params[${index}][value]`" x-model="row.value" placeholder="value" class="field field-mono" spellcheck="false">
+                                <button type="button" @click="removeFormRow(index)" class="text-text-faint hover:text-danger"
+                                        :aria-label="`Remove ${row.key || 'empty'} field`">&times;</button>
+                            </div>
+                        </template>
+                        <button type="button" @click="addFormRow" class="btn btn-link mt-1">+ Add row</button>
+                    </div>
+                </template>
             </div>
 
             <div x-show="activeTab === 'headers'" x-cloak>

@@ -19,6 +19,7 @@
         'bodyType' => 'json',
         'body' => '',
         'params' => [],
+        'formRows' => [],
         'headers' => [],
         'persist' => true,
     ]])

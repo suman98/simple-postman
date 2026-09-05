@@ -25,15 +25,15 @@
         </div>
 
         <div class="flex flex-wrap items-center gap-x-5 gap-y-1 border-t border-border px-3">
-            <button type="button" @click="activeTab = 'params'" class="tab" :class="activeTab === 'params' && 'tab-active'">
-                <span x-text="paramsLabel"></span><span class="text-text-faint" x-show="filledParamCount" x-text="` (${filledParamCount})`" x-cloak></span>
+            <button type="button" x-show="isGet" @click="activeTab = 'params'" class="tab" :class="activeTab === 'params' && 'tab-active'">
+                Params<span class="text-text-faint" x-show="filledParamCount" x-text="` (${filledParamCount})`" x-cloak></span>
             </button>
-            <button type="button" @click="showBodyTab()" x-show="bodyType === 'json'" class="tab" :class="activeTab === 'body' && 'tab-active'">Body</button>
+            <button type="button" x-show="!isGet" @click="showBodyTab()" class="tab" :class="activeTab === 'body' && 'tab-active'">Body</button>
             <button type="button" @click="activeTab = 'headers'" class="tab" :class="activeTab === 'headers' && 'tab-active'">
                 Headers<span class="text-text-faint" x-show="filledHeaderCount" x-text="` (${filledHeaderCount})`" x-cloak></span>
             </button>
 
-            <label class="ml-auto flex shrink-0 items-center gap-2 py-1.5">
+            <label class="ml-auto flex shrink-0 items-center gap-2 py-1.5" x-show="!isGet">
                 <span class="whitespace-nowrap text-xs text-text-muted">Body type</span>
                 <select x-model="bodyType" class="field w-auto px-2 py-1 text-xs" aria-label="Body type">
                     <option value="json">JSON</option>
@@ -43,8 +43,8 @@
         </div>
 
         <div class="border-t border-border p-3">
-            <div x-show="activeTab === 'params'">
-                <p class="mb-3 text-xs text-text-muted" x-text="paramsHint"></p>
+            <div x-show="activeTab === 'params' && isGet">
+                <p class="mb-3 text-xs text-text-muted">Sent as query string parameters.</p>
                 <div class="mb-1.5 grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_28px] gap-x-2">
                     <span class="text-xs text-text-muted">Key</span>
                     <span class="text-xs text-text-muted">Value</span>
@@ -60,13 +60,47 @@
                 <button type="button" @click="addParam" class="btn btn-link mt-1">+ Add row</button>
             </div>
 
-            <div x-show="activeTab === 'body'" x-cloak>
-                <div class="mb-2 flex items-center justify-between">
-                    <span class="text-xs text-text-muted">JSON request body</span>
-                    <button type="button" @click="formatJson" class="btn btn-secondary btn-sm">Format</button>
-                </div>
-                <div x-ref="jsonEditor" class="overflow-hidden rounded border border-border"></div>
-                <p class="mt-2 text-xs text-danger" x-show="jsonFormatError" x-text="jsonFormatError" x-cloak></p>
+            <div x-show="activeTab === 'body' && !isGet" x-cloak>
+                <template x-if="bodyType === 'json'">
+                    <div>
+                        <div class="mb-2 flex items-center justify-between">
+                            <span class="text-xs text-text-muted">JSON request body</span>
+                            <div class="flex items-center gap-2">
+                                <button type="button" @click="copyPayload" class="btn btn-secondary btn-sm">
+                                    <span x-show="!payloadCopied">Copy</span>
+                                    <span x-show="payloadCopied" x-cloak class="text-success">Copied</span>
+                                </button>
+                                <button type="button" @click="formatJson" class="btn btn-secondary btn-sm">Format</button>
+                            </div>
+                        </div>
+                        <div x-ref="jsonEditor" class="overflow-hidden rounded border border-border"></div>
+                        <p class="mt-2 text-xs text-danger" x-show="jsonFormatError" x-text="jsonFormatError" x-cloak></p>
+                    </div>
+                </template>
+
+                <template x-if="bodyType === 'form'">
+                    <div>
+                        <div class="mb-1.5 flex items-center justify-between">
+                            <div class="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-x-2">
+                                <span class="text-xs text-text-muted">Key</span>
+                                <span class="text-xs text-text-muted">Value</span>
+                            </div>
+                            <button type="button" @click="copyPayload" class="btn btn-secondary btn-sm">
+                                <span x-show="!payloadCopied">Copy</span>
+                                <span x-show="payloadCopied" x-cloak class="text-success">Copied</span>
+                            </button>
+                        </div>
+                        <template x-for="(row, index) in formRows" :key="index">
+                            <div class="mb-1.5 grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_28px] items-center gap-x-2">
+                                <input type="text" x-model="row.key" placeholder="key" class="field field-mono" spellcheck="false">
+                                <input type="text" x-model="row.value" placeholder="value" class="field field-mono" spellcheck="false">
+                                <button type="button" @click="removeFormRow(index)" class="text-text-faint hover:text-danger"
+                                        :aria-label="`Remove ${row.key || 'empty'} field`">&times;</button>
+                            </div>
+                        </template>
+                        <button type="button" @click="addFormRow" class="btn btn-link mt-1">+ Add row</button>
+                    </div>
+                </template>
             </div>
 
             <div x-show="activeTab === 'headers'" x-cloak>

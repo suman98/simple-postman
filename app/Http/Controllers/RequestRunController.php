@@ -47,38 +47,36 @@ class RequestRunController extends Controller
             ->withOptions(['verify' => true]);
 
         $options = [];
+        $sendKey = 'query';
 
-        if (in_array($method, ['POST', 'PUT', 'PATCH'], true)) {
-            if ($bodyType === 'form') {
-                $pending = $pending->asForm();
-                $options = $data['params'] ?? [];
-            } else {
-                $pending = $pending->asJson();
-                $raw = $data['body'] ?? '';
-                if (trim($raw) === '') {
-                    $options = [];
-                } else {
-                    $decoded = json_decode($raw, true);
-                    if (json_last_error() !== JSON_ERROR_NONE) {
-                        return response()->json([
-                            'error' => 'Invalid JSON body: '.json_last_error_msg(),
-                        ], 422);
-                    }
-                    $options = $decoded;
-                }
-            }
-        } else {
-            // GET / DELETE: send params as query string.
+        if ($method === 'GET') {
+            // GET: send params as query string.
             $options = $data['params'] ?? [];
+        } elseif ($bodyType === 'form') {
+            $pending = $pending->asForm();
+            $options = $data['params'] ?? [];
+            $sendKey = 'form_params';
+        } else {
+            $pending = $pending->asJson();
+            $raw = $data['body'] ?? '';
+            $sendKey = 'json';
+            if (trim($raw) === '') {
+                $options = [];
+            } else {
+                $decoded = json_decode($raw, true);
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    return response()->json([
+                        'error' => 'Invalid JSON body: '.json_last_error_msg(),
+                    ], 422);
+                }
+                $options = $decoded;
+            }
         }
 
         $start = microtime(true);
 
         try {
-            $response = $pending->send($method, $url, $method === 'GET' || $method === 'DELETE'
-                ? ['query' => $options]
-                : ['json' => $options]
-            );
+            $response = $pending->send($method, $url, [$sendKey => $options]);
         } catch (ConnectionException $e) {
             return response()->json([
                 'error' => 'Connection failed: '.$e->getMessage(),
