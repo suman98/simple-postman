@@ -10,6 +10,11 @@ class Project extends Model
     protected $fillable = [
         'name',
         'description',
+        'variables',
+    ];
+
+    protected $casts = [
+        'variables' => 'array',
     ];
 
     public function endpoints(): HasMany

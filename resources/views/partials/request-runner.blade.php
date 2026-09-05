@@ -3,6 +3,48 @@
 @endphp
 <div x-data="requestRunner({{ Illuminate\Support\Js::from($runner) }})">
 
+    {{-- Environment --}}
+    <section class="panel mb-4" aria-label="Environment">
+        <button type="button" @click="envOpen = !envOpen" class="flex w-full items-center justify-between px-3 py-2.5">
+            <span class="text-sm font-medium">
+                Environment<span class="text-text-faint" x-show="filledEnvCount" x-text="` (${filledEnvCount})`" x-cloak></span>
+            </span>
+            <span class="text-xs text-text-muted" x-text="envOpen ? 'Hide' : 'Show'"></span>
+        </button>
+
+        <div x-show="envOpen" x-cloak class="border-t border-border p-3">
+            <p class="mb-3 text-xs text-text-muted">
+                Use <code class="font-mono">@{{name}}</code> in the URL, params, headers, or body &mdash; resolved when you send.
+                <span x-show="envScope === 'quickTest'">Saved to this browser only.</span>
+                <span x-show="envScope === 'project'">Saved to this project.</span>
+            </p>
+
+            <div class="mb-1.5 grid grid-cols-[20px_minmax(0,1fr)_minmax(0,1.5fr)_28px] gap-x-2">
+                <span></span>
+                <span class="text-xs text-text-muted">Key</span>
+                <span class="text-xs text-text-muted">Value</span>
+            </div>
+            <template x-for="(row, index) in envRows" :key="index">
+                <div class="mb-1.5 grid grid-cols-[20px_minmax(0,1fr)_minmax(0,1.5fr)_28px] items-center gap-x-2">
+                    <input type="checkbox" x-model="row.enabled" @change="saveEnvironment()" class="h-4 w-4" aria-label="Enabled">
+                    <input type="text" x-model="row.key" @change="saveEnvironment()" placeholder="base_url" class="field field-mono" spellcheck="false">
+                    <input type="text" x-model="row.value" @change="saveEnvironment()" placeholder="https://api.example.com" class="field field-mono" spellcheck="false">
+                    <button type="button" @click="removeEnvRow(index)" class="text-text-faint hover:text-danger"
+                            :aria-label="`Remove ${row.key || 'empty'} variable`">&times;</button>
+                </div>
+            </template>
+
+            <div class="flex items-center gap-3">
+                <button type="button" @click="addEnvRow" class="btn btn-link">+ Add variable</button>
+                <span class="ml-auto flex items-center gap-2 text-xs">
+                    <span x-show="envSaving" class="text-text-muted">Saving…</span>
+                    <span x-show="envSaved" x-cloak class="text-success">Saved</span>
+                    <span x-show="envError" x-cloak class="text-danger" x-text="envError"></span>
+                </span>
+            </div>
+        </div>
+    </section>
+
     {{-- Request --}}
     <section class="panel" aria-label="Request">
         <div class="flex flex-col gap-2 p-3 sm:flex-row sm:items-center">
@@ -14,7 +56,7 @@
                 <option>DELETE</option>
             </select>
 
-            <input type="url" x-model="url" @keydown.enter="send" spellcheck="false"
+            <input type="text" inputmode="url" x-model="url" @keydown.enter="send" spellcheck="false"
                    placeholder="https://api.example.com/users"
                    class="field field-mono min-w-0 flex-1" aria-label="Request URL">
 
@@ -22,24 +64,28 @@
                 <span x-show="!loading">Send</span>
                 <span x-show="loading" x-cloak>Sending…</span>
             </button>
+
+            @if ($runner['endpointId'] ?? false)
+                <button type="button" @click="saveEndpoint" :disabled="endpointSaving" class="btn btn-secondary shrink-0">
+                    <span x-show="!endpointSaving && !endpointSaved">Save</span>
+                    <span x-show="endpointSaving" x-cloak>Saving…</span>
+                    <span x-show="endpointSaved" x-cloak class="text-success">Saved</span>
+                </button>
+            @endif
         </div>
+
+        @if ($runner['endpointId'] ?? false)
+            <p class="px-3 pb-2 text-xs text-danger" x-show="endpointSaveError" x-text="endpointSaveError" x-cloak></p>
+        @endif
 
         <div class="flex flex-wrap items-center gap-x-5 gap-y-1 border-t border-border px-3">
             <button type="button" x-show="isGet" @click="activeTab = 'params'" class="tab" :class="activeTab === 'params' && 'tab-active'">
                 Params<span class="text-text-faint" x-show="filledParamCount" x-text="` (${filledParamCount})`" x-cloak></span>
             </button>
             <button type="button" x-show="!isGet" @click="showBodyTab()" class="tab" :class="activeTab === 'body' && 'tab-active'">Body</button>
-            <button type="button" @click="activeTab = 'headers'" class="tab" :class="activeTab === 'headers' && 'tab-active'">
+            <button type="button" @click="showHeadersTab()" class="tab" :class="activeTab === 'headers' && 'tab-active'">
                 Headers<span class="text-text-faint" x-show="filledHeaderCount" x-text="` (${filledHeaderCount})`" x-cloak></span>
             </button>
-
-            <label class="ml-auto flex shrink-0 items-center gap-2 py-1.5" x-show="!isGet">
-                <span class="whitespace-nowrap text-xs text-text-muted">Body type</span>
-                <select x-model="bodyType" class="field w-auto px-2 py-1 text-xs" aria-label="Body type">
-                    <option value="json">JSON</option>
-                    <option value="form">Form data</option>
-                </select>
-            </label>
         </div>
 
         <div class="border-t border-border p-3">
@@ -51,8 +97,8 @@
                 </div>
                 <template x-for="(row, index) in paramRows" :key="index">
                     <div class="mb-1.5 grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_28px] items-center gap-x-2">
-                        <input type="text" x-model="row.key" placeholder="key" class="field field-mono" spellcheck="false">
-                        <input type="text" x-model="row.value" placeholder="value" class="field field-mono" spellcheck="false">
+                        <input type="text" x-model="row.key" @change="persistState()" placeholder="key" class="field field-mono" spellcheck="false">
+                        <input type="text" x-model="row.value" @change="persistState()" placeholder="value" class="field field-mono" spellcheck="false">
                         <button type="button" @click="removeParam(index)" class="text-text-faint hover:text-danger"
                                 :aria-label="`Remove ${row.key || 'empty'} parameter`">&times;</button>
                     </div>
@@ -61,62 +107,84 @@
             </div>
 
             <div x-show="activeTab === 'body' && !isGet" x-cloak>
-                <template x-if="bodyType === 'json'">
-                    <div>
-                        <div class="mb-2 flex items-center justify-between">
-                            <span class="text-xs text-text-muted">JSON request body</span>
-                            <div class="flex items-center gap-2">
-                                <button type="button" @click="copyPayload" class="btn btn-secondary btn-sm">
-                                    <span x-show="!payloadCopied">Copy</span>
-                                    <span x-show="payloadCopied" x-cloak class="text-success">Copied</span>
-                                </button>
-                                <button type="button" @click="formatJson" class="btn btn-secondary btn-sm">Format</button>
-                            </div>
-                        </div>
-                        <div x-ref="jsonEditor" class="overflow-hidden rounded border border-border"></div>
-                        <p class="mt-2 text-xs text-danger" x-show="jsonFormatError" x-text="jsonFormatError" x-cloak></p>
+                <div class="mb-1.5 flex items-center justify-between">
+                    <div class="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-x-2" x-show="bodyType === 'form'">
+                        <span class="text-xs text-text-muted">Key</span>
+                        <span class="text-xs text-text-muted">Value</span>
                     </div>
-                </template>
+                    <span x-show="bodyType === 'json'" class="text-xs text-text-muted">JSON request body</span>
 
-                <template x-if="bodyType === 'form'">
-                    <div>
-                        <div class="mb-1.5 flex items-center justify-between">
-                            <div class="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-x-2">
-                                <span class="text-xs text-text-muted">Key</span>
-                                <span class="text-xs text-text-muted">Value</span>
-                            </div>
-                            <button type="button" @click="copyPayload" class="btn btn-secondary btn-sm">
-                                <span x-show="!payloadCopied">Copy</span>
-                                <span x-show="payloadCopied" x-cloak class="text-success">Copied</span>
-                            </button>
-                        </div>
-                        <template x-for="(row, index) in formRows" :key="index">
-                            <div class="mb-1.5 grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_28px] items-center gap-x-2">
-                                <input type="text" x-model="row.key" placeholder="key" class="field field-mono" spellcheck="false">
-                                <input type="text" x-model="row.value" placeholder="value" class="field field-mono" spellcheck="false">
-                                <button type="button" @click="removeFormRow(index)" class="text-text-faint hover:text-danger"
-                                        :aria-label="`Remove ${row.key || 'empty'} field`">&times;</button>
-                            </div>
-                        </template>
-                        <button type="button" @click="addFormRow" class="btn btn-link mt-1">+ Add row</button>
+                    <div class="ml-auto flex items-center gap-2">
+                        <button type="button" @click="copyPayload" class="btn btn-secondary btn-sm">
+                            <span x-show="!payloadCopied">Copy</span>
+                            <span x-show="payloadCopied" x-cloak class="text-success">Copied</span>
+                        </button>
+                        <button type="button" @click="formatJson" x-show="bodyType === 'json'" class="btn btn-secondary btn-sm">Format</button>
+                        <label class="flex items-center gap-2">
+                            <span class="text-xs text-text-muted">View</span>
+                            <select x-model="bodyType" class="field w-auto px-2 py-1 text-xs" aria-label="Body view">
+                                <option value="json">JSON</option>
+                                <option value="form">Form data</option>
+                            </select>
+                        </label>
                     </div>
-                </template>
+                </div>
+
+                <div x-show="bodyType === 'json'">
+                    <div x-ref="jsonEditor" class="overflow-hidden rounded border border-border"></div>
+                    <p class="mt-2 text-xs text-danger" x-show="jsonFormatError" x-text="jsonFormatError" x-cloak></p>
+                </div>
+
+                <div x-show="bodyType === 'form'">
+                    <template x-for="(row, index) in formRows" :key="index">
+                        <div class="mb-1.5 grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_28px] items-center gap-x-2">
+                            <input type="text" x-model="row.key" @change="persistState()" placeholder="key" class="field field-mono" spellcheck="false">
+                            <input type="text" x-model="row.value" @change="persistState()" placeholder="value" class="field field-mono" spellcheck="false">
+                            <button type="button" @click="removeFormRow(index)" class="text-text-faint hover:text-danger"
+                                    :aria-label="`Remove ${row.key || 'empty'} field`">&times;</button>
+                        </div>
+                    </template>
+                    <button type="button" @click="addFormRow" class="btn btn-link mt-1">+ Add row</button>
+                </div>
+                <p class="mt-2 text-xs text-text-faint">Switching JSON / Form data carries the payload across.</p>
             </div>
 
             <div x-show="activeTab === 'headers'" x-cloak>
-                <div class="mb-1.5 grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_28px] gap-x-2">
-                    <span class="text-xs text-text-muted">Key</span>
-                    <span class="text-xs text-text-muted">Value</span>
-                </div>
-                <template x-for="(row, index) in headerRows" :key="index">
-                    <div class="mb-1.5 grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_28px] items-center gap-x-2">
-                        <input type="text" x-model="row.key" placeholder="Content-Type" class="field field-mono" spellcheck="false">
-                        <input type="text" x-model="row.value" placeholder="application/json" class="field field-mono" spellcheck="false">
-                        <button type="button" @click="removeHeader(index)" class="text-text-faint hover:text-danger"
-                                :aria-label="`Remove ${row.key || 'empty'} header`">&times;</button>
+                <div class="mb-1.5 flex items-center justify-between">
+                    <div class="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-x-2" x-show="headersMode === 'rows'">
+                        <span class="text-xs text-text-muted">Key</span>
+                        <span class="text-xs text-text-muted">Value</span>
                     </div>
-                </template>
-                <button type="button" @click="addHeader" class="btn btn-link mt-1">+ Add row</button>
+                    <span x-show="headersMode === 'json'" class="text-xs text-text-muted">Headers as JSON</span>
+
+                    <div class="ml-auto flex items-center gap-2">
+                        <button type="button" @click="formatHeadersJson" x-show="headersMode === 'json'" class="btn btn-secondary btn-sm">Format</button>
+                        <label class="flex items-center gap-2">
+                            <span class="text-xs text-text-muted">View</span>
+                            <select x-model="headersMode" class="field w-auto px-2 py-1 text-xs" aria-label="Headers view">
+                                <option value="rows">Rows</option>
+                                <option value="json">JSON</option>
+                            </select>
+                        </label>
+                    </div>
+                </div>
+
+                <div x-show="headersMode === 'rows'">
+                    <template x-for="(row, index) in headerRows" :key="index">
+                        <div class="mb-1.5 grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_28px] items-center gap-x-2">
+                            <input type="text" x-model="row.key" @change="persistState()" placeholder="Content-Type" class="field field-mono" spellcheck="false">
+                            <input type="text" x-model="row.value" @change="persistState()" placeholder="application/json" class="field field-mono" spellcheck="false">
+                            <button type="button" @click="removeHeader(index)" class="text-text-faint hover:text-danger"
+                                    :aria-label="`Remove ${row.key || 'empty'} header`">&times;</button>
+                        </div>
+                    </template>
+                    <button type="button" @click="addHeader" class="btn btn-link mt-1">+ Add row</button>
+                </div>
+
+                <div x-show="headersMode === 'json'">
+                    <div x-ref="headersEditor" class="overflow-hidden rounded border border-border"></div>
+                    <p class="mt-2 text-xs text-danger" x-show="headersJsonError" x-text="headersJsonError" x-cloak></p>
+                </div>
             </div>
         </div>
 
@@ -183,7 +251,26 @@
                         <p class="py-10 text-center text-sm text-text-muted" x-show="!response.raw_body" x-cloak>
                             This response has no body.
                         </p>
-                        <div x-ref="responseEditor" class="overflow-hidden rounded border border-border" x-show="response.raw_body"></div>
+
+                        <div x-show="response.raw_body">
+                            <div class="mb-2 flex items-center justify-end" x-show="isHtmlResponse" x-cloak>
+                                <label class="flex items-center gap-2">
+                                    <span class="text-xs text-text-muted">View</span>
+                                    <select x-model="responseBodyView" class="field w-auto px-2 py-1 text-xs" aria-label="Response view">
+                                        <option value="raw">Raw</option>
+                                        <option value="preview">Preview</option>
+                                    </select>
+                                </label>
+                            </div>
+
+                            <div x-ref="responseEditor" class="overflow-hidden rounded border border-border" x-show="responseBodyView === 'raw'"></div>
+
+                            <iframe x-show="responseBodyView === 'preview'" x-cloak
+                                    :srcdoc="response.raw_body"
+                                    sandbox=""
+                                    class="h-[420px] w-full rounded border border-border bg-white"
+                                    title="Response preview"></iframe>
+                        </div>
                     </div>
 
                     <div x-show="responseTab === 'headers'" x-cloak>

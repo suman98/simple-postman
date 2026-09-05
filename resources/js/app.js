@@ -8,8 +8,8 @@ import { syntaxHighlighting, defaultHighlightStyle, bracketMatching } from '@cod
 
 /**
  * Mounts a small JSON-aware CodeMirror editor into `container` and keeps
- * `onChange` in sync with its content. Used for every raw JSON body field
- * (Quick Test, endpoint show/test, endpoint create/edit).
+ * `onChange` in sync with its content. Used for every editable JSON field:
+ * the request body, and (in "JSON view") the headers editor.
  */
 function createJsonEditor(container, initialDoc, onChange) {
     const view = new EditorView({
@@ -121,6 +121,7 @@ function mountVerified(container, factory, onView, attemptsLeft = 6) {
     }, 80);
 }
 
+/** Replaces a CodeMirror view's content wholesale. */
 function setEditorContent(view, text) {
     if (!view) return;
     view.dispatch({
@@ -136,6 +137,52 @@ function formatJsonEditor(view, currentText) {
     } catch (e) {
         return { ok: false, error: 'Invalid JSON: ' + e.message };
     }
+}
+
+/**
+ * Parses a JSON object's text into [{key,value}] rows; null if the text
+ * isn't valid JSON or isn't a flat object (arrays/primitives have no sensible
+ * key/value shape). Non-string values are re-stringified so a row's value is
+ * always plain text. Used to carry a payload across the JSON<->form-data
+ * toggle, and across the headers rows<->JSON view toggle.
+ */
+function jsonTextToRows(text) {
+    try {
+        const parsed = JSON.parse(text || '{}');
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            const rows = Object.entries(parsed).map(([key, value]) => ({
+                key,
+                value: typeof value === 'string' ? value : JSON.stringify(value),
+            }));
+            return rows.length ? rows : [{ key: '', value: '' }];
+        }
+    } catch (e) {
+        // not valid JSON, or not a flat object - nothing sensible to carry over
+    }
+    return null;
+}
+
+/** Serializes [{key,value}] rows into pretty-printed JSON object text. */
+function rowsToJsonText(rows) {
+    const obj = {};
+    for (const row of rows) {
+        if (row.key) obj[row.key] = row.value;
+    }
+    return JSON.stringify(obj, null, 2);
+}
+
+/**
+ * Resolves {{variable}} placeholders against a project's or Quick Test's
+ * environment, exactly like Postman: unresolved names are left as-is (a typo
+ * shouldn't silently become an empty string), and a disabled or empty-key row
+ * doesn't participate.
+ */
+function resolveVariables(text, variables) {
+    if (!text) return text;
+    return text.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (match, name) => {
+        const row = variables.find((v) => v.key === name);
+        return row ? row.value : match;
+    });
 }
 
 /**
@@ -205,42 +252,16 @@ async function copyToClipboard(text) {
 }
 
 /**
- * Endpoint create/edit form: params + headers row repeaters that post
- * as normal named array fields (params[i][key], headers[i][key]),
- * plus the body-type toggle that shows/hides the raw JSON editor. The
- * editor's content mirrors into a hidden `body` textarea so the form
- * still posts it as a normal field.
+ * Shared behaviour for both Alpine components below: the JSON<->form-data body
+ * toggle and the headers rows<->JSON view toggle. Both editors, once mounted,
+ * are never destroyed — their containers stay in the DOM (toggled with
+ * x-show, not x-if) and just get shown/hidden, so there's no remount dance
+ * and no stale-reference risk. Mixed into each component via
+ * withEditableJsonBehaviour() below, which preserves its getters as live
+ * accessors so `this` still resolves to the actual component instance.
  */
-Alpine.data('endpointForm', (config) => ({
-    bodyType: config.bodyType || 'json',
-    body: config.body || '',
-    method: config.method || 'GET',
-    activeTab: (config.method || 'GET') === 'GET' ? 'params' : 'body',
-    paramRows: config.params && config.params.length ? config.params : [{ key: '', value: '' }],
-    formRows: config.formRows && config.formRows.length ? config.formRows : [{ key: '', value: '' }],
-    headerRows: config.headers && config.headers.length ? config.headers : [{ key: '', value: '' }],
-
-    jsonEditorView: null,
-    jsonFormatError: null,
-    payloadCopied: false,
-
-    init() {
-        this.$watch('method', () => this.syncActiveTab());
-        if (this.activeTab === 'body' && this.bodyType === 'json') {
-            this.$nextTick(() => this.mountJsonEditor());
-        }
-    },
-
-    get isGet() {
-        return this.method === 'GET';
-    },
-
-    syncActiveTab() {
-        if (this.isGet && this.activeTab === 'body') this.activeTab = 'params';
-        if (!this.isGet && this.activeTab === 'params') this.showBodyTab();
-    },
-
-    /** Mounted the first time the Body tab is actually shown. */
+const editableJsonBehaviour = {
+    /** Body tab: mounts the request-body editor the first time it's visible. */
     mountJsonEditor() {
         if (this.jsonEditorView) return;
         mountWhenReady(() => this.$refs.jsonEditor, (el) => {
@@ -263,7 +284,166 @@ Alpine.data('endpointForm', (config) => ({
 
     showBodyTab() {
         this.activeTab = 'body';
-        if (this.bodyType === 'json') this.$nextTick(() => this.mountJsonEditor());
+        if (this.bodyType === 'json' && !this.jsonEditorView) {
+            this.$nextTick(() => this.mountJsonEditor());
+        }
+    },
+
+    /** Carries the payload across the toggle so switching never loses data. */
+    syncBodyType(bodyType) {
+        if (bodyType === 'json') {
+            this.body = rowsToJsonText(this.formRows);
+            if (this.jsonEditorView) {
+                setEditorContent(this.jsonEditorView, this.body);
+            } else if (this.activeTab === 'body') {
+                this.$nextTick(() => this.mountJsonEditor());
+            }
+            return;
+        }
+        const rows = jsonTextToRows(this.body);
+        if (rows) this.formRows = rows;
+    },
+
+    /** Headers tab: mounts the headers-as-JSON editor the first time it's visible. */
+    mountHeadersEditor() {
+        if (this.headersEditorView) return;
+        mountWhenReady(() => this.$refs.headersEditor, (el) => {
+            if (this.headersEditorView) return;
+            this.headersEditorView = createJsonEditor(el, this.headersJson, (value) => {
+                this.headersJson = value;
+            });
+        });
+    },
+
+    formatHeadersJson() {
+        const result = formatJsonEditor(this.headersEditorView, this.headersJson);
+        if (result.ok) {
+            this.headersJson = result.value;
+            this.headersJsonError = null;
+        } else {
+            this.headersJsonError = result.error;
+        }
+    },
+
+    showHeadersTab() {
+        this.activeTab = 'headers';
+        if (this.headersMode === 'json' && !this.headersEditorView) {
+            this.$nextTick(() => this.mountHeadersEditor());
+        }
+    },
+
+    syncHeadersMode(mode) {
+        if (mode === 'json') {
+            this.headersJson = rowsToJsonText(this.headerRows);
+            if (this.headersEditorView) {
+                setEditorContent(this.headersEditorView, this.headersJson);
+            } else if (this.activeTab === 'headers') {
+                this.$nextTick(() => this.mountHeadersEditor());
+            }
+            return;
+        }
+        const rows = jsonTextToRows(this.headersJson);
+        if (rows) this.headerRows = rows;
+        this.persistState?.();
+    },
+
+    /**
+     * Forces headerRows to reflect the JSON view's latest text even if the
+     * user never toggled back to Rows — used right before a native form
+     * submit (see endpointForm), since the headers view mode is otherwise
+     * only synced back to rows lazily, on toggle.
+     */
+    ensureHeaderRowsSynced() {
+        if (this.headersMode !== 'json') return;
+        const rows = jsonTextToRows(this.headersJson);
+        if (rows) this.headerRows = rows;
+    },
+
+    addParam() {
+        this.paramRows.push({ key: '', value: '' });
+    },
+    removeParam(index) {
+        this.paramRows.splice(index, 1);
+        if (this.paramRows.length === 0) this.addParam();
+        this.persistState?.();
+    },
+    addFormRow() {
+        this.formRows.push({ key: '', value: '' });
+    },
+    removeFormRow(index) {
+        this.formRows.splice(index, 1);
+        if (this.formRows.length === 0) this.addFormRow();
+        this.persistState?.();
+    },
+    addHeader() {
+        this.headerRows.push({ key: '', value: '' });
+    },
+    removeHeader(index) {
+        this.headerRows.splice(index, 1);
+        if (this.headerRows.length === 0) this.addHeader();
+        this.persistState?.();
+    },
+
+    get isGet() {
+        return this.method === 'GET';
+    },
+
+    get methodClass() {
+        return 'method-' + this.method.toLowerCase();
+    },
+
+    get paramsLabel() {
+        return this.bodyType === 'form' ? 'Form data' : 'Params';
+    },
+};
+
+/**
+ * Merges editableJsonBehaviour's getters (isGet, methodClass, paramsLabel)
+ * onto a component as live accessors. Object.assign would instead invoke each
+ * getter once immediately, against the wrong `this`, and freeze the result —
+ * silently breaking every x-show that depends on them.
+ */
+function withEditableJsonBehaviour(component) {
+    return Object.defineProperties(component, Object.getOwnPropertyDescriptors(editableJsonBehaviour));
+}
+
+/**
+ * Endpoint create/edit form: params + headers row repeaters that post
+ * as normal named array fields (params[i][key], headers[i][key]),
+ * plus the body-type toggle that shows/hides the raw JSON editor. The
+ * editor's content mirrors into a hidden `body` textarea so the form
+ * still posts it as a normal field.
+ */
+Alpine.data('endpointForm', (config) => withEditableJsonBehaviour({
+    bodyType: config.bodyType || 'json',
+    body: config.body || '',
+    method: config.method || 'GET',
+    activeTab: (config.method || 'GET') === 'GET' ? 'params' : 'body',
+    paramRows: config.params && config.params.length ? config.params : [{ key: '', value: '' }],
+    formRows: config.formRows && config.formRows.length ? config.formRows : [{ key: '', value: '' }],
+    headerRows: config.headers && config.headers.length ? config.headers : [{ key: '', value: '' }],
+
+    headersMode: 'rows',
+    headersJson: '',
+    headersEditorView: null,
+    headersJsonError: null,
+
+    jsonEditorView: null,
+    jsonFormatError: null,
+    payloadCopied: false,
+
+    init() {
+        this.$watch('method', () => this.syncActiveTab());
+        this.$watch('bodyType', (value) => this.syncBodyType(value));
+        this.$watch('headersMode', (value) => this.syncHeadersMode(value));
+        if (this.activeTab === 'body' && this.bodyType === 'json') {
+            this.$nextTick(() => this.mountJsonEditor());
+        }
+    },
+
+    syncActiveTab() {
+        if (this.isGet && this.activeTab === 'body') this.activeTab = 'params';
+        if (!this.isGet && this.activeTab === 'params') this.showBodyTab();
     },
 
     get payloadText() {
@@ -285,32 +465,6 @@ Alpine.data('endpointForm', (config) => ({
             }, 1500);
         }
     },
-
-    addParam() {
-        this.paramRows.push({ key: '', value: '' });
-    },
-    removeParam(index) {
-        this.paramRows.splice(index, 1);
-        if (this.paramRows.length === 0) this.addParam();
-    },
-    addFormRow() {
-        this.formRows.push({ key: '', value: '' });
-    },
-    removeFormRow(index) {
-        this.formRows.splice(index, 1);
-        if (this.formRows.length === 0) this.addFormRow();
-    },
-    addHeader() {
-        this.headerRows.push({ key: '', value: '' });
-    },
-    removeHeader(index) {
-        this.headerRows.splice(index, 1);
-        if (this.headerRows.length === 0) this.addHeader();
-    },
-
-    get methodClass() {
-        return 'method-' + this.method.toLowerCase();
-    },
 }));
 
 /**
@@ -319,7 +473,7 @@ Alpine.data('endpointForm', (config) => ({
  * client-side/ephemeral; saving an endpoint is a normal form post
  * handled separately (see endpointForm).
  */
-Alpine.data('requestRunner', (config) => ({
+Alpine.data('requestRunner', (config) => withEditableJsonBehaviour({
     method: config.method || 'GET',
     url: config.url || '',
     bodyType: config.bodyType || 'json',
@@ -329,19 +483,57 @@ Alpine.data('requestRunner', (config) => ({
     headerRows: config.headers && config.headers.length ? config.headers : [{ key: '', value: '' }],
     activeTab: (config.method || 'GET') === 'GET' ? 'params' : 'body',
 
+    headersMode: 'rows',
+    headersJson: '',
+    headersEditorView: null,
+    headersJsonError: null,
+
     persist: !!config.persist,
     storageKey: config.storageKey || 'apiBench:lastRequest',
+
+    // Environment: either this browser's Quick Test variables (localStorage,
+    // scoped like the rest of Quick Test's persistence) or a project's saved
+    // variables (server-side, shared with anyone who opens that project).
+    envScope: config.environmentScope || 'quickTest',
+    envProjectId: config.projectId || null,
+    envRows: config.environmentVariables && config.environmentVariables.length
+        ? config.environmentVariables
+        : [{ key: '', value: '', enabled: true }],
+    envOpen: false,
+    envSaving: false,
+    envSaved: false,
+    envError: null,
+
+    // Set only on a saved endpoint's page: lets the builder write the request
+    // back to that endpoint instead of the edits being run-only.
+    endpointId: config.endpointId || null,
+    endpointSaving: false,
+    endpointSaved: false,
+    endpointSaveError: null,
 
     jsonEditorView: null,
     jsonFormatError: null,
     responseEditorView: null,
     responseTab: 'body',
+    responseBodyView: 'raw',
     copied: false,
     payloadCopied: false,
 
+    loading: false,
+    error: null,
+    response: null,
+
     init() {
         if (this.persist) this.restore();
+        if (this.envScope === 'quickTest') this.restoreEnvironment();
         this.$watch('method', () => this.syncActiveTab());
+        this.$watch('bodyType', (value) => this.syncBodyType(value));
+        this.$watch('headersMode', (value) => this.syncHeadersMode(value));
+        // Switching from Preview to Raw is the first time the raw-text
+        // container is actually visible, so that's when it gets mounted.
+        this.$watch('responseBodyView', (view) => {
+            if (view === 'raw') this.$nextTick(() => this.renderResponseBody());
+        });
 
         // Open on whichever tab actually carries something, so a filed
         // endpoint shows its payload instead of an empty params table.
@@ -350,28 +542,120 @@ Alpine.data('requestRunner', (config) => ({
         }
     },
 
-    get isGet() {
-        return this.method === 'GET';
-    },
-
     syncActiveTab() {
         if (this.isGet && this.activeTab === 'body') this.activeTab = 'params';
         if (!this.isGet && this.activeTab === 'params') this.showBodyTab();
     },
 
-    /** Mounted the first time the Body tab is actually shown. */
-    mountJsonEditor() {
-        if (this.jsonEditorView) return;
-        mountWhenReady(() => this.$refs.jsonEditor, (el) => {
-            if (this.jsonEditorView) return;
-            this.jsonEditorView = createJsonEditor(el, this.body, (value) => {
-                this.body = value;
-            });
-        });
+    restoreEnvironment() {
+        try {
+            const raw = localStorage.getItem('apiBench:quickTestEnv');
+            const saved = raw ? JSON.parse(raw) : null;
+            if (saved && saved.length) this.envRows = saved;
+        } catch (e) {
+            // storage unavailable - keep the default empty row
+        }
     },
 
-    get methodClass() {
-        return 'method-' + this.method.toLowerCase();
+    /** Enabled, named rows only — what actually resolves a {{name}}. */
+    get activeVariables() {
+        return this.envRows.filter((row) => row.key && row.enabled !== false);
+    },
+
+    get filledEnvCount() {
+        return this.activeVariables.length;
+    },
+
+    addEnvRow() {
+        this.envRows.push({ key: '', value: '', enabled: true });
+    },
+
+    removeEnvRow(index) {
+        this.envRows.splice(index, 1);
+        if (this.envRows.length === 0) this.addEnvRow();
+        this.saveEnvironment();
+    },
+
+    /**
+     * Quick Test's environment lives in this browser only (localStorage),
+     * matching how it persists the last request. A project's environment is
+     * shared, so it's saved to the server instead — called on blur/change
+     * rather than per keystroke.
+     */
+    async saveEnvironment() {
+        if (this.envScope === 'quickTest') {
+            try {
+                localStorage.setItem('apiBench:quickTestEnv', JSON.stringify(this.envRows));
+            } catch (e) {
+                // storage unavailable (private mode, quota) - ignore
+            }
+            return;
+        }
+
+        if (!this.envProjectId) return;
+        this.envSaving = true;
+        this.envError = null;
+        try {
+            const res = await fetch(`/projects/${this.envProjectId}/environment`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                },
+                body: JSON.stringify({ variables: this.envRows }),
+            });
+            if (!res.ok) throw new Error('Save failed');
+            this.envSaved = true;
+            setTimeout(() => {
+                this.envSaved = false;
+            }, 1500);
+        } catch (e) {
+            this.envError = 'Could not save environment.';
+        } finally {
+            this.envSaving = false;
+        }
+    },
+
+    /**
+     * Writes the request as it currently stands back to the saved endpoint —
+     * method, URL, params/form fields, headers and body. Headers edited in the
+     * JSON view are folded back into rows first, since rows are what's stored.
+     */
+    async saveEndpoint() {
+        if (!this.endpointId) return;
+
+        this.ensureHeaderRowsSynced();
+        this.endpointSaving = true;
+        this.endpointSaveError = null;
+
+        try {
+            const res = await fetch(`/endpoints/${this.endpointId}/request`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                },
+                body: JSON.stringify({
+                    method: this.method,
+                    url: this.url,
+                    body_type: this.bodyType,
+                    body: this.body,
+                    params: this.isGet ? this.paramRows : this.formRows,
+                    headers: this.headerRows,
+                }),
+            });
+            if (!res.ok) throw new Error('Save failed');
+            this.endpointSaved = true;
+            setTimeout(() => {
+                this.endpointSaved = false;
+            }, 1500);
+        } catch (e) {
+            this.endpointSaveError = 'Could not save.';
+        } finally {
+            this.endpointSaving = false;
+        }
     },
 
     get statusClass() {
@@ -397,6 +681,16 @@ Alpine.data('requestRunner', (config) => ({
         }));
     },
 
+    /** True when the response declares itself as HTML, regardless of header casing. */
+    get isHtmlResponse() {
+        const headers = this.response?.headers ?? {};
+        const contentTypeKey = Object.keys(headers).find((key) => key.toLowerCase() === 'content-type');
+        if (!contentTypeKey) return false;
+        const value = headers[contentTypeKey];
+        const contentType = Array.isArray(value) ? value.join(', ') : String(value);
+        return contentType.toLowerCase().includes('text/html');
+    },
+
     showResponseBody() {
         this.responseTab = 'body';
         this.$nextTick(() => this.renderResponseBody());
@@ -406,10 +700,14 @@ Alpine.data('requestRunner', (config) => ({
      * Builds the response viewer into whichever container is currently mounted.
      * The response block is re-created on every send, so the view is rebuilt
      * rather than refilled — which also guarantees CodeMirror measures its line
-     * heights against the layout that is really on screen.
+     * heights against the layout that is really on screen. No-ops while the
+     * Raw view isn't showing (e.g. an HTML response defaults to Preview) —
+     * mounting into a hidden, zero-width container would just fail silently.
+     * The responseBodyView watcher below mounts it once Raw is actually shown.
      */
     renderResponseBody() {
         if (!this.response?.raw_body) return;
+        if (this.responseBodyView !== 'raw') return;
         const body = this.prettyBody;
 
         this.responseEditorView?.destroy();
@@ -429,21 +727,6 @@ Alpine.data('requestRunner', (config) => ({
                 }
             );
         });
-    },
-
-    formatJson() {
-        const result = formatJsonEditor(this.jsonEditorView, this.body);
-        if (result.ok) {
-            this.body = result.value;
-            this.jsonFormatError = null;
-        } else {
-            this.jsonFormatError = result.error;
-        }
-    },
-
-    showBodyTab() {
-        this.activeTab = 'body';
-        if (this.bodyType === 'json') this.$nextTick(() => this.mountJsonEditor());
     },
 
     get payloadText() {
@@ -511,11 +794,16 @@ Alpine.data('requestRunner', (config) => ({
         this.paramRows = [{ key: '', value: '' }];
         this.formRows = [{ key: '', value: '' }];
         this.headerRows = [{ key: '', value: '' }];
+        this.headersMode = 'rows';
+        this.headersJson = '';
+        this.headersJsonError = null;
         this.activeTab = 'params';
         this.response = null;
         this.error = null;
         this.jsonFormatError = null;
+        this.responseBodyView = 'raw';
         setEditorContent(this.jsonEditorView, '');
+        setEditorContent(this.headersEditorView, '');
         setEditorContent(this.responseEditorView, '');
         if (this.persist) {
             try {
@@ -538,32 +826,6 @@ Alpine.data('requestRunner', (config) => ({
         setEditorContent(this.jsonEditorView, '');
     },
 
-    addParam() {
-        this.paramRows.push({ key: '', value: '' });
-    },
-    removeParam(index) {
-        this.paramRows.splice(index, 1);
-        if (this.paramRows.length === 0) this.addParam();
-    },
-    addFormRow() {
-        this.formRows.push({ key: '', value: '' });
-    },
-    removeFormRow(index) {
-        this.formRows.splice(index, 1);
-        if (this.formRows.length === 0) this.addFormRow();
-    },
-    addHeader() {
-        this.headerRows.push({ key: '', value: '' });
-    },
-    removeHeader(index) {
-        this.headerRows.splice(index, 1);
-        if (this.headerRows.length === 0) this.addHeader();
-    },
-
-    loading: false,
-    error: null,
-    response: null,
-
     get filledParamCount() {
         return this.paramRows.filter((row) => row.key).length;
     },
@@ -578,12 +840,20 @@ Alpine.data('requestRunner', (config) => ({
         this.response = null;
         this.persistState();
 
+        // Variables resolve into the outgoing request only — the URL, body
+        // and rows on screen keep showing the {{name}} template, exactly
+        // like Postman leaves a saved request untouched by environment state.
+        const vars = this.activeVariables;
+        const resolve = (text) => resolveVariables(text, vars);
+
         const params = {};
         const rows = this.isGet ? this.paramRows : this.formRows;
         for (const row of rows) {
-            if (row.key) params[row.key] = row.value;
+            if (row.key) params[resolve(row.key)] = resolve(row.value);
         }
-        const headers = this.headerRows.filter((row) => row.key);
+        const headers = this.headerRows
+            .filter((row) => row.key)
+            .map((row) => ({ key: resolve(row.key), value: resolve(row.value) }));
 
         try {
             const res = await fetch('/api/run', {
@@ -595,9 +865,9 @@ Alpine.data('requestRunner', (config) => ({
                 },
                 body: JSON.stringify({
                     method: this.method,
-                    url: this.url,
+                    url: resolve(this.url),
                     body_type: this.bodyType,
-                    body: this.body,
+                    body: resolve(this.body),
                     params,
                     headers,
                 }),
@@ -610,6 +880,8 @@ Alpine.data('requestRunner', (config) => ({
             } else {
                 this.response = data;
                 this.responseTab = 'body';
+                // HTML defaults to its rendered preview; anything else shows raw.
+                this.responseBodyView = this.isHtmlResponse ? 'preview' : 'raw';
                 this.$nextTick(() => this.renderResponseBody());
             }
         } catch (e) {
@@ -635,13 +907,6 @@ Alpine.data('requestRunner', (config) => ({
             return JSON.stringify(this.response.body, null, 2);
         }
         return this.response.raw_body;
-    },
-
-    get statusClass() {
-        if (!this.response) return '';
-        if (this.response.status >= 200 && this.response.status < 300) return 'text-green-600';
-        if (this.response.status >= 400) return 'text-red-600';
-        return 'text-amber-600';
     },
 }));
 

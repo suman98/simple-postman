@@ -13,4 +13,6 @@ Route::get('/quick-test', QuickTestController::class)->name('quick-test');
 Route::post('/api/run', [RequestRunController::class, 'run'])->name('api.run');
 
 Route::resource('projects', ProjectController::class);
+Route::put('/projects/{project}/environment', [ProjectController::class, 'updateEnvironment'])->name('projects.environment.update');
 Route::resource('projects.endpoints', EndpointController::class)->shallow();
+Route::put('/endpoints/{endpoint}/request', [EndpointController::class, 'updateRequest'])->name('endpoints.request.update');

@@ -25,7 +25,7 @@
     </div>
 
     <p class="mb-4 text-sm text-text-muted">
-        Changes here only affect this run. Use Edit to update the saved endpoint.
+        Edit the request and hit Send to try it. Save writes it back to this endpoint.
     </p>
 
     @php
@@ -41,5 +41,9 @@
         'formRows' => $endpoint->method !== 'GET' ? $endpointRows : [],
         'headers' => $endpoint->headers ?? [],
         'persist' => false,
+        'endpointId' => $endpoint->id,
+        'environmentScope' => 'project',
+        'projectId' => $endpoint->project_id,
+        'environmentVariables' => $endpoint->project->variables ?? [],
     ]])
 @endsection

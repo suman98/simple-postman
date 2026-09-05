@@ -22,5 +22,7 @@
         'formRows' => [],
         'headers' => [],
         'persist' => true,
+        'environmentScope' => 'quickTest',
+        'environmentVariables' => [],
     ]])
 @endsection
