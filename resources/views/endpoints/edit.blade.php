@@ -7,6 +7,7 @@
     $storedRows = collect($endpoint->params ?? [])->map(fn ($v, $k) => ['key' => $k, 'value' => $v])->values()->toArray();
     $formConfig = [
         'method' => $storedMethod,
+        'url' => old('url', $endpoint->url),
         'bodyType' => old('body_type', $endpoint->body_type),
         'body' => old('body', $endpoint->body ?? ''),
         'params' => old('params', $storedMethod === 'GET' ? $storedRows : []),

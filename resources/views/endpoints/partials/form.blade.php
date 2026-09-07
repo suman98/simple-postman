@@ -20,7 +20,7 @@
                 @endforeach
             </select>
 
-            <input type="text" inputmode="url" name="url" value="{{ old('url', $endpoint->url ?? '') }}"
+            <input type="text" inputmode="url" name="url" x-model="url"
                    placeholder="https://api.example.com/users" spellcheck="false" required
                    class="field field-mono min-w-0 flex-1 @error('url') border-danger @enderror"
                    aria-label="Request URL"

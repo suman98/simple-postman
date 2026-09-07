@@ -6,6 +6,7 @@
     $endpoint = null;
     $formConfig = [
         'method' => old('method', 'GET'),
+        'url' => old('url', ''),
         'bodyType' => old('body_type', 'json'),
         'body' => old('body', ''),
         'params' => old('params', []),

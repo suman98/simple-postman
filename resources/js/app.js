@@ -172,6 +172,66 @@ function rowsToJsonText(rows) {
 }
 
 /**
+ * Percent-decoding that never throws on half-typed input (a lone "%" while
+ * the user is still typing is not valid encoding) and treats "+" as a space,
+ * the way a query string means it.
+ */
+function decodeQueryPart(text) {
+    try {
+        return decodeURIComponent(text.replace(/\+/g, ' '));
+    } catch (e) {
+        return text;
+    }
+}
+
+/** Encodes a query key/value but leaves {{variable}} braces readable. */
+function encodeQueryPart(text) {
+    return encodeURIComponent(text ?? '')
+        .replace(/%7B/g, '{')
+        .replace(/%7D/g, '}');
+}
+
+/**
+ * Splits a URL's query string into [{key,value}] rows. Empty pairs are
+ * dropped, a key with no "=" yields an empty value, and the fragment is
+ * ignored — it isn't part of the query.
+ */
+function urlQueryToRows(url) {
+    const queryStart = (url || '').indexOf('?');
+    if (queryStart === -1) return [];
+    const query = url.slice(queryStart + 1).split('#')[0];
+    return query
+        .split('&')
+        .filter((pair) => pair !== '')
+        .map((pair) => {
+            const eq = pair.indexOf('=');
+            return eq === -1
+                ? { key: decodeQueryPart(pair), value: '' }
+                : { key: decodeQueryPart(pair.slice(0, eq)), value: decodeQueryPart(pair.slice(eq + 1)) };
+        });
+}
+
+/** Rewrites a URL's query string from [{key,value}] rows, keeping path and fragment. */
+function rowsToUrlQuery(url, rows) {
+    const text = url || '';
+    const hashStart = text.indexOf('#');
+    const hash = hashStart === -1 ? '' : text.slice(hashStart);
+    const withoutHash = hashStart === -1 ? text : text.slice(0, hashStart);
+    const base = withoutHash.split('?')[0];
+    const query = rows
+        .filter((row) => row.key)
+        .map((row) => `${encodeQueryPart(row.key)}=${encodeQueryPart(row.value)}`)
+        .join('&');
+    return base + (query ? `?${query}` : '') + hash;
+}
+
+/** True when two row lists carry the same keys and values in the same order. */
+function sameRows(a, b) {
+    if (a.length !== b.length) return false;
+    return a.every((row, index) => row.key === b[index].key && row.value === b[index].value);
+}
+
+/**
  * Resolves {{variable}} placeholders against a project's or Quick Test's
  * environment, exactly like Postman: unresolved names are left as-is (a typo
  * shouldn't silently become an empty string), and a disabled or empty-key row
@@ -359,6 +419,46 @@ const editableJsonBehaviour = {
         if (rows) this.headerRows = rows;
     },
 
+    /**
+     * Query string <-> Params rows, kept in step both ways like Postman:
+     * typing "?query=123" onto the URL fills the rows, and editing a row
+     * rewrites the URL. GET only — that's the only method whose params
+     * travel in the URL. `urlDriven` marks the URL as the side that just
+     * changed, so a half-typed "a=1&" isn't tidied away under the cursor.
+     */
+    watchUrlParams() {
+        this.$watch('url', () => this.syncParamsFromUrl());
+        this.$watch('paramRows', () => this.syncUrlFromParams());
+
+        // A saved GET whose URL already carries a query: the URL wins, and
+        // any stored param it doesn't mention is appended to it.
+        if (!this.isGet) return;
+        const urlRows = urlQueryToRows(this.url);
+        if (!urlRows.length) return;
+        const inUrl = new Set(urlRows.map((row) => row.key));
+        const extras = this.paramRows.filter((row) => row.key && !inUrl.has(row.key));
+        this.paramRows = [...urlRows, ...extras];
+    },
+
+    syncParamsFromUrl() {
+        if (!this.isGet) return;
+        const rows = urlQueryToRows(this.url);
+        const filled = this.paramRows.filter((row) => row.key || row.value);
+        if (sameRows(rows, filled)) return;
+
+        this.urlDriven = true;
+        this.paramRows = rows.length ? rows : [{ key: '', value: '' }];
+        this.$nextTick(() => {
+            this.urlDriven = false;
+        });
+    },
+
+    syncUrlFromParams() {
+        if (!this.isGet || this.urlDriven) return;
+        const url = rowsToUrlQuery(this.url, this.paramRows);
+        if (url !== this.url) this.url = url;
+    },
+
     addParam() {
         this.paramRows.push({ key: '', value: '' });
     },
@@ -418,6 +518,8 @@ Alpine.data('endpointForm', (config) => withEditableJsonBehaviour({
     bodyType: config.bodyType || 'json',
     body: config.body || '',
     method: config.method || 'GET',
+    url: config.url || '',
+    urlDriven: false,
     activeTab: (config.method || 'GET') === 'GET' ? 'params' : 'body',
     paramRows: config.params && config.params.length ? config.params : [{ key: '', value: '' }],
     formRows: config.formRows && config.formRows.length ? config.formRows : [{ key: '', value: '' }],
@@ -436,6 +538,7 @@ Alpine.data('endpointForm', (config) => withEditableJsonBehaviour({
         this.$watch('method', () => this.syncActiveTab());
         this.$watch('bodyType', (value) => this.syncBodyType(value));
         this.$watch('headersMode', (value) => this.syncHeadersMode(value));
+        this.watchUrlParams();
         if (this.activeTab === 'body' && this.bodyType === 'json') {
             this.$nextTick(() => this.mountJsonEditor());
         }
@@ -444,6 +547,8 @@ Alpine.data('endpointForm', (config) => withEditableJsonBehaviour({
     syncActiveTab() {
         if (this.isGet && this.activeTab === 'body') this.activeTab = 'params';
         if (!this.isGet && this.activeTab === 'params') this.showBodyTab();
+        // Switching back to GET picks the URL's query string back up.
+        if (this.isGet) this.syncParamsFromUrl();
     },
 
     get payloadText() {
@@ -476,6 +581,7 @@ Alpine.data('endpointForm', (config) => withEditableJsonBehaviour({
 Alpine.data('requestRunner', (config) => withEditableJsonBehaviour({
     method: config.method || 'GET',
     url: config.url || '',
+    urlDriven: false,
     bodyType: config.bodyType || 'json',
     body: config.body || '',
     paramRows: config.params && config.params.length ? config.params : [{ key: '', value: '' }],
@@ -529,6 +635,7 @@ Alpine.data('requestRunner', (config) => withEditableJsonBehaviour({
         this.$watch('method', () => this.syncActiveTab());
         this.$watch('bodyType', (value) => this.syncBodyType(value));
         this.$watch('headersMode', (value) => this.syncHeadersMode(value));
+        this.watchUrlParams();
         // Switching from Preview to Raw is the first time the raw-text
         // container is actually visible, so that's when it gets mounted.
         this.$watch('responseBodyView', (view) => {
@@ -545,6 +652,8 @@ Alpine.data('requestRunner', (config) => withEditableJsonBehaviour({
     syncActiveTab() {
         if (this.isGet && this.activeTab === 'body') this.activeTab = 'params';
         if (!this.isGet && this.activeTab === 'params') this.showBodyTab();
+        // Switching back to GET picks the URL's query string back up.
+        if (this.isGet) this.syncParamsFromUrl();
     },
 
     restoreEnvironment() {
